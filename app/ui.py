@@ -36,18 +36,20 @@ async def main(message: cl.Message):
             response = await client.post(
                 "http://127.0.0.1:8001/run-agent",
                 json={"message": message.content},
-                timeout=40  # Give LLM time to think
+                timeout=30  # Give LLM time to think
             )
             
             if response.status_code == 200:
                 data = response.json()
                 uni_name = data.get("university", "Unknown University")
                 program_name = data.get("program", "Unknown Program")
+                level=data.get("level","Bachelors")
                 
                 # Save data to session
                 cl.user_session.set("uni", uni_name)
                 cl.user_session.set("program", program_name)
-                
+                cl.user_session.set("level", level)
+
                 # Format the UI output
                 clean_name = f"{uni_name}-{program_name}".replace(" ", "-")
                 step.output = f"Targeting: {uni_name} ({program_name})"
@@ -59,21 +61,41 @@ async def main(message: cl.Message):
 
 
     # STEP 2: Document generation
-    async with cl.Step(name="Strategist Agent",type="run")as agent_step:
-        # Define the filename for this request
-        filename=f"{clean_name}.docx"
-        file_path=os.path.join(OUTPUT_DIR,filename)
+    async with cl.Step(name="Strategist Agent", type="run") as agent_step:
+        # 1. Prepare data for the API
+        research_data = {
+            "university": cl.user_session.get("uni"),
+            "program": cl.user_session.get("program"),
+            "level": cl.user_session.get("level"),
+            "background": message.content # Sending full user bio as context
+        }
 
-        # Agentic logic/API calls
-        # Agent should save the output to the specific file_path
-        await cl.sleep(4)
+        # 2. Call the Agentic Kickoff endpoint
+        async with httpx.AsyncClient() as client:
+            # We increase timeout because scraping + reasoning takes time
+            res = await client.post(
+                "http://127.0.0.1:8001/start-research",
+                json=research_data,
+                timeout=180 
+            )
+            if res.status_code == 200:
+                agent_data = res.json()
+                report_content = agent_data.get("report", "No report generated.")
+                agent_step.output = f"Strategy for {uni_name} completed."
+            else:
+                agent_step.output = f"Error: Agent failed to generate strategy."
+                return
 
-        agent_step.output=f"Strategy for {uni_name} completed."
-    
-    # STEP 3: Delivery of the file to the user. 
-    if os.path.exists(file_path):
+    # --- STEP 3: Delivery (File Generation & Upload) ---
+    # Define the filename and path
+    filename = f"{clean_name}.docx"
+    file_path = os.path.join(OUTPUT_DIR, filename)
+    with open(os.path.join(OUTPUT_DIR, f"{clean_name}.txt"), "w") as f:
+        f.write(report_content)
+    final_path = os.path.join(OUTPUT_DIR, f"{clean_name}.txt")
+
+    if os.path.exists(final_path):
         await cl.Message(
-            content=f"I have generated your custom strategy for **{uni_name}**.",
-            elements=[cl.File(name=filename,path=file_path,display="inline")]
+            content=f"Done! I have compiled the research and strategy for **{uni_name}**. You can download your guide below:",
+            elements=[cl.File(name=f"{clean_name}.txt", path=final_path, display="inline")]
         ).send()
-

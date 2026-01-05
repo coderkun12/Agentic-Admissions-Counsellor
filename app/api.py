@@ -1,7 +1,13 @@
+import sys
+import asyncio
+if sys.platform=='win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 from fastapi import FastAPI, HTTPException
 from app.utils import agent_app
 import uvicorn
 from app.schemas import ChatRequest, ResearchRequest
+from agents.graph import agent_app2
 
 app = FastAPI(title="CollegeInfoBot API")
 
@@ -35,19 +41,22 @@ async def start_research(request: ResearchRequest):
     Triggers the Agentic Hierarchy (manager->scraper->strategist)
     to generate the professional applicant guide. 
     """
+    initial_state={
+        "university": request.university,
+        "program": request.program,
+        "level": request.level,
+        "user_input": request.background, # Their profile info
+        "status": "research_starting",
+        "university_data": "" # To be filled by scrapper.
+    }
     try:
-        """
-        Call your LangGraph kickoff. 
-        result=await admissions_crew.kickoff(inputs={
-        "message"=request.message
-        })
-        """
         print(f"Research Started!")
-        return {"status":"success","message":"Strategy generation initiated."}
+        final_state = await agent_app2.ainvoke(initial_state)
+        return {"status":"success","report":final_state.get("user_input")}
     except Exception as e: 
         print(f"AGENT ERROR:{str(e)}")
         raise HTTPException(status_code=500,detail=f"Agent Failed {str(e)}")
 
 
 if __name__ == "__main__":
-    uvicorn.run("app.api:app", host="127.0.0.1", port=8001, reload=True)
+    uvicorn.run("app.api:app", host="127.0.0.1", port=8001, reload=False)
